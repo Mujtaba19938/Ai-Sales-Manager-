@@ -44,13 +44,23 @@ Guidelines:
 - Suggest concrete actions to improve profitability.
 - Keep responses concise but insightful. Use bullet points for recommendations.
 - If the user asks about data you do not have, say so honestly.
-- Format numbers as currency where appropriate.`;
+- Format numbers as currency where appropriate.
+- When the user sends images (receipts, invoices, product photos, price tags, reports):
+  - Extract all relevant data: product names, prices, quantities, totals, dates, categories.
+  - Present the extracted data in a clear, structured format.
+  - Suggest how to record this data in the system — tell the user they can add it as a sale, expense, or product.
+  - If it's a receipt, identify line items and totals. If it's a product/price tag, extract the product name and price.
+  - Relate findings to their existing business data when possible (matching categories, comparing prices).`;
 }
 
 export async function* streamChat(messages, systemPrompt) {
+  const hasImages = messages.some(m =>
+    Array.isArray(m.content) && m.content.some(b => b.type === 'image')
+  );
+
   const stream = await getClient().messages.stream({
     model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 1024,
+    max_tokens: hasImages ? 2048 : 1024,
     system: systemPrompt,
     messages,
   });

@@ -1,20 +1,29 @@
 import { useState, useCallback } from 'react';
 import { chatStream } from '../api/client';
 import { useDateRange } from '../context/DateRangeContext';
+import { buildMessageContent } from '../utils/imageUtils';
 
 export function useChat() {
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const { dateRange } = useDateRange();
 
-  const sendMessage = useCallback(async (text) => {
-    const userMsg = { role: 'user', content: text };
+  const sendMessage = useCallback(async (text, images = []) => {
+    const content = buildMessageContent(text, images);
+    const userMsg = {
+      role: 'user',
+      content,
+      _imagePreviewUrls: images.map(img => img.previewUrl),
+    };
     const history = [...messages, userMsg];
     setMessages([...history, { role: 'assistant', content: '' }]);
     setIsStreaming(true);
 
+    // Strip client-only fields before sending to API
+    const apiMessages = history.map(({ _imagePreviewUrls, ...msg }) => msg);
+
     try {
-      const stream = await chatStream(history, dateRange);
+      const stream = await chatStream(apiMessages, dateRange);
       const reader = stream.getReader();
       const decoder = new TextDecoder();
       let assistantText = '';
@@ -55,7 +64,14 @@ export function useChat() {
     }
   }, [messages, dateRange]);
 
-  const clearChat = useCallback(() => setMessages([]), []);
+  const clearChat = useCallback(() => {
+    messages.forEach(msg => {
+      if (msg._imagePreviewUrls) {
+        msg._imagePreviewUrls.forEach(url => URL.revokeObjectURL(url));
+      }
+    });
+    setMessages([]);
+  }, [messages]);
 
   return { messages, sendMessage, isStreaming, clearChat };
 }

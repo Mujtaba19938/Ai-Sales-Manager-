@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Send, Trash2, Bot, User, Sparkles, ArrowRight } from 'lucide-react';
+import { X, Send, Trash2, User, Sparkles, ArrowRight, Paperclip, Camera } from 'lucide-react';
 import { useChat } from '../../hooks/useChat';
+import { ImageStagingArea, MessageImages } from './ImagePreview';
+import CameraCapture from './CameraCapture';
+import { processImageFile, getTextFromContent } from '../../utils/imageUtils';
 
 const SUGGESTIONS = [
   { icon: '📊', text: 'How are my sales performing?' },
@@ -11,18 +14,72 @@ const SUGGESTIONS = [
 export default function ChatPanel({ open, onClose }) {
   const { messages, sendMessage, isStreaming, clearChat } = useChat();
   const [input, setInput] = useState('');
+  const [stagedImages, setStagedImages] = useState([]);
+  const [showCamera, setShowCamera] = useState(false);
+  const [imageError, setImageError] = useState(null);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Auto-dismiss image errors after 5 seconds
+  useEffect(() => {
+    if (!imageError) return;
+    const t = setTimeout(() => setImageError(null), 5000);
+    return () => clearTimeout(t);
+  }, [imageError]);
+
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+
+    if (stagedImages.length + files.length > 4) {
+      setImageError('Maximum 4 images per message');
+      e.target.value = '';
+      return;
+    }
+
+    setImageError(null);
+    try {
+      const processed = await Promise.all(files.map(processImageFile));
+      setStagedImages(prev => [...prev, ...processed]);
+    } catch (err) {
+      setImageError(err.message);
+    }
+    e.target.value = '';
+  };
+
+  const handleCameraCapture = async (file) => {
+    setShowCamera(false);
+    try {
+      const processed = await processImageFile(file);
+      setStagedImages(prev => [...prev, processed]);
+    } catch (err) {
+      setImageError(err.message);
+    }
+  };
+
+  const handleRemoveImage = (index) => {
+    setStagedImages(prev => {
+      const copy = [...prev];
+      URL.revokeObjectURL(copy[index].previewUrl);
+      copy.splice(index, 1);
+      return copy;
+    });
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!input.trim() || isStreaming) return;
-    sendMessage(input.trim());
+    if ((!input.trim() && stagedImages.length === 0) || isStreaming) return;
+    sendMessage(input.trim(), stagedImages);
     setInput('');
+    setStagedImages([]);
+    setImageError(null);
   };
+
+  const canSend = !isStreaming && (input.trim() || stagedImages.length > 0);
 
   return (
     <div style={{
@@ -36,6 +93,14 @@ export default function ChatPanel({ open, onClose }) {
       display: 'flex', flexDirection: 'column',
       zIndex: 40,
     }}>
+      {/* Camera overlay */}
+      {showCamera && (
+        <CameraCapture
+          onCapture={handleCameraCapture}
+          onClose={() => setShowCamera(false)}
+        />
+      )}
+
       {/* Header */}
       <div style={{
         padding: '18px 20px',
@@ -104,7 +169,7 @@ export default function ChatPanel({ open, onClose }) {
               fontSize: 13, color: 'var(--text-secondary)',
               textAlign: 'center', maxWidth: 280, lineHeight: 1.6, marginBottom: 28,
             }}>
-              I can analyze your sales data, identify trends, and give actionable insights.
+              I can analyze your sales data, identify trends, and give actionable insights. You can also send me photos of receipts or products!
             </p>
 
             {/* Suggestion cards */}
@@ -141,65 +206,129 @@ export default function ChatPanel({ open, onClose }) {
         )}
 
         {/* Chat Messages */}
-        {messages.map((msg, i) => (
-          <div key={i} style={{
-            display: 'flex', gap: 10,
-            flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
-          }}>
-            {/* Avatar */}
-            <div style={{
-              width: 30, height: 30, borderRadius: 10,
-              background: msg.role === 'user' ? '#0f172a' : 'rgba(34,197,94,0.12)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0,
-            }}>
-              {msg.role === 'user'
-                ? <User size={14} color="#fff" />
-                : <Sparkles size={14} style={{ color: '#22c55e' }} />
-              }
-            </div>
+        {messages.map((msg, i) => {
+          const displayText = typeof msg.content === 'string'
+            ? msg.content
+            : getTextFromContent(msg.content);
 
-            {/* Bubble */}
-            <div style={{
-              padding: '12px 16px',
-              borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-              background: msg.role === 'user' ? '#0f172a' : 'var(--bg-card)',
-              color: msg.role === 'user' ? '#ffffff' : 'var(--text-primary)',
-              fontSize: 13, lineHeight: 1.7, maxWidth: '82%',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          return (
+            <div key={i} style={{
+              display: 'flex', gap: 10,
+              flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
             }}>
-              {msg.content || (isStreaming && i === messages.length - 1 ? (
-                <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite 0.2s' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite 0.4s' }} />
-                </span>
-              ) : '')}
+              {/* Avatar */}
+              <div style={{
+                width: 30, height: 30, borderRadius: 10,
+                background: msg.role === 'user' ? '#0f172a' : 'rgba(34,197,94,0.12)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                {msg.role === 'user'
+                  ? <User size={14} color="#fff" />
+                  : <Sparkles size={14} style={{ color: '#22c55e' }} />
+                }
+              </div>
+
+              {/* Bubble */}
+              <div style={{
+                padding: '12px 16px',
+                borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                background: msg.role === 'user' ? '#0f172a' : 'var(--bg-card)',
+                color: msg.role === 'user' ? '#ffffff' : 'var(--text-primary)',
+                fontSize: 13, lineHeight: 1.7, maxWidth: '82%',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                {/* Image thumbnails */}
+                {msg._imagePreviewUrls && msg._imagePreviewUrls.length > 0 && (
+                  <MessageImages imageUrls={msg._imagePreviewUrls} />
+                )}
+                {displayText || (isStreaming && i === messages.length - 1 ? (
+                  <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite' }} />
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite 0.2s' }} />
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.4s infinite 0.4s' }} />
+                  </span>
+                ) : '')}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input Bar */}
       <form onSubmit={handleSubmit} style={{
-        padding: '16px 20px',
+        padding: '12px 20px 16px',
         borderTop: '1px solid var(--border-color)',
         background: 'var(--bg-card)',
       }}>
+        {/* Image staging area */}
+        <ImageStagingArea images={stagedImages} onRemove={handleRemoveImage} />
+
+        {/* Error message */}
+        {imageError && (
+          <div style={{
+            padding: '6px 16px', fontSize: 12, color: '#f87171',
+            background: 'rgba(248,113,113,0.08)', borderRadius: 6,
+            marginBottom: 8,
+          }}>
+            {imageError}
+          </div>
+        )}
+
         <div style={{
-          display: 'flex', gap: 8, alignItems: 'center',
-          padding: '6px 6px 6px 16px',
+          display: 'flex', gap: 6, alignItems: 'center',
+          padding: '6px 6px 6px 10px',
           borderRadius: 16, border: '1px solid var(--border-color)',
           background: 'var(--bg-primary)',
           transition: 'border-color 0.15s',
         }}>
+          {/* Upload button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isStreaming}
+            title="Upload image"
+            style={{
+              background: 'none', border: 'none', cursor: isStreaming ? 'not-allowed' : 'pointer',
+              color: 'var(--text-secondary)', display: 'flex', padding: 6,
+              flexShrink: 0, borderRadius: 8, transition: 'color 0.15s',
+            }}
+          >
+            <Paperclip size={18} />
+          </button>
+
+          {/* Camera button */}
+          <button
+            type="button"
+            onClick={() => setShowCamera(true)}
+            disabled={isStreaming}
+            title="Take photo"
+            style={{
+              background: 'none', border: 'none', cursor: isStreaming ? 'not-allowed' : 'pointer',
+              color: 'var(--text-secondary)', display: 'flex', padding: 6,
+              flexShrink: 0, borderRadius: 8, transition: 'color 0.15s',
+            }}
+          >
+            <Camera size={18} />
+          </button>
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
+
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="Ask about your business..."
+            placeholder={stagedImages.length > 0 ? 'Add a message about the image...' : 'Ask about your business...'}
             disabled={isStreaming}
             style={{
               flex: 1, padding: '8px 0', border: 'none',
@@ -209,13 +338,13 @@ export default function ChatPanel({ open, onClose }) {
           />
           <button
             type="submit"
-            disabled={isStreaming || !input.trim()}
+            disabled={!canSend}
             style={{
               width: 38, height: 38, borderRadius: 12,
               border: 'none',
-              background: isStreaming || !input.trim() ? 'var(--bg-secondary)' : '#22c55e',
-              color: isStreaming || !input.trim() ? 'var(--text-secondary)' : '#fff',
-              cursor: isStreaming ? 'not-allowed' : 'pointer',
+              background: canSend ? '#22c55e' : 'var(--bg-secondary)',
+              color: canSend ? '#fff' : 'var(--text-secondary)',
+              cursor: canSend ? 'pointer' : 'not-allowed',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'all 0.2s',
               flexShrink: 0,
